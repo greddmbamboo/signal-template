@@ -1,0 +1,1 @@
+ALTER TABLE `jobs` ADD `cover_letter` text DEFAULT '' NOT NULL;
