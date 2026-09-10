@@ -19,17 +19,23 @@ Source ZIP: https://github.com/greddmbamboo/signal-template/archive/refs/heads/m
 
 Download and extract the source ZIP into a new folder, or clone the repository. Do this yourself using your available tools. The person does not need a GitHub account. Do not use a similarly named messaging app or another Signal repository.
 
-### How to guide the person
+### Required setup order
 
-- Start by checking the current folder and available tools. Get and extract the source from the link above. Do not require the person to create a GitHub repository, copy source files, or run terminal commands when you can do that work.
-- Use a dedicated new folder. Preserve existing projects and deployments.
-- Explain the next account action in plain language, one step at a time. Ask only for missing choices, sign-in, permissions, and confirmation of paid resources. Never ask the person to paste credentials into chat.
-- Begin with job tracking and leave AI optional. If they want cover letters, guide them through their own OpenAI project, billing controls, and a hosted secret after tracking works.
-- Use their own Cloudflare account, a new database, and an Access policy restricted to their email. Help configure these through available tools; if a dashboard action requires the person, give the exact next action and wait for it.
-- Check whether they already control a domain in Cloudflare. If they do not, explain that this version requires one before proceeding with domain-dependent setup. Do not imply that creating an account alone is sufficient or buy a domain without authorization.
-- Do not silently change the hosting or authentication architecture to avoid a setup prerequisite.
-- Run local checks, deploy only the new instance within the person's authorization, and verify the resulting site. If account access or tooling blocks you, clearly name what remains instead of claiming completion.
-- Finish by opening or linking their working Signal URL and helping them sign in, complete onboarding, and add their first job. Keep implementation details out of this final handoff unless requested.
+**Complete all possible work before asking the person for account or domain information.** Do not open with “Do you have a Cloudflare account?” or “Do you already control a domain?” Do not interrupt local preparation with an account questionnaire.
+
+1. Inspect the current folder and available tools. Download and extract Signal into a dedicated new folder. Preserve existing projects and deployments. Install dependencies, run the local tests, and resolve local failures that you can fix. Prepare configuration using placeholders for account-dependent values. Do not require a GitHub account or ask the person to run commands you can run yourself.
+2. When all work that does not require their cloud account is complete, say:
+
+   > We now need a Cloudflare account to host your Signal Job-Finder app. [Click here to log in or create an account](https://dash.cloudflare.com/). Once you're signed in, I'll walk you through the rest.
+
+   Open that link for them when browser tools are available. Let them enter credentials and complete sign-in themselves. Do not ask them to paste passwords, tokens, or API keys into chat. If an authenticated account is already available, use that evidence instead of asking them to sign in again; confirm which account to use if there is a choice.
+3. After sign-in, handle account authorization and resource setup with your available tools. Initiate Wrangler login when needed and guide the person through its authorization screen. Inspect accessible accounts and domains rather than asking for information you can obtain. Explain each required user action in plain language, one action at a time, and continue doing the work as soon as it is possible.
+4. Resolve the domain only at the point it is needed. If an existing domain is available, suggest a suitable Signal subdomain and ask for that choice. If none is available, explain that this version needs a domain, then guide them through connecting one they own or registering one. Do not buy anything or change existing DNS without appropriate authorization. Creating an account alone does not satisfy the domain requirement.
+5. Create their new database, configure the private Access email-sign-in policy, deploy the new instance within their authorization, and verify it. When a step must happen in the dashboard, take them to the relevant page when possible and tell them the next exact action; do not hand them a long checklist of technical tasks. Preserve existing deployments.
+6. Start with working job tracking. Offer optional cover letters afterward; if wanted, walk them through their own OpenAI project, billing controls, and a hosted secret. Ask for approval before paid actions. Do not make optional AI credentials a prerequisite for local preparation or job tracking.
+7. Finish by opening or linking their working Signal URL and helping them sign in, complete onboarding, and add their first job. If a step is blocked, explain precisely what is needed and complete any remaining independent work. Do not claim deployment or verification succeeded when it did not.
+
+Keep the technical guide below as your own execution reference. Show the person only what they need for the current step. Do not silently change the hosting or authentication architecture to avoid a prerequisite.
 
 ---
 
@@ -39,7 +45,7 @@ Download and extract the source ZIP into a new folder, or clone the repository. 
 
 This is the canonical setup guide for both Codex and Claude Code. Each installer owns their Cloudflare Worker, D1 database, Access policy, and optional OpenAI project and API key. No shared backend, subscription credits, or existing deployment is required.
 
-## 1. Create your repository
+## 1. Prepare the app locally
 
 Download and extract [the Signal source](https://github.com/greddmbamboo/signal-template/archive/refs/heads/main.zip), or clone https://github.com/greddmbamboo/signal-template.git. Your assistant should do this for you. A personal GitHub account or repository is not required. Do not publish the development repository's old Git history. Keep your repository private if you later put personal configuration in it.
 
@@ -54,7 +60,7 @@ Tests create temporary local databases, sign synthetic Access tokens, and mock o
 
 ## 2. Create your Cloudflare resources
 
-Use your own Cloudflare account and a domain in that account. Authenticate with `npx wrangler login`. Confirm the selected account before creating resources.
+Only begin this phase after completing all possible local preparation and checks in step 1. Use the login/create-account handoff above, then guide the person through authentication with `npx wrangler login`. Confirm the selected account before creating resources. Inspect available domains after sign-in and resolve the hostname when it is needed; do not ask about accounts or domains before local work is complete.
 
 ```sh
 npx wrangler d1 create signal-db
