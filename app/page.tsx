@@ -1,4 +1,5 @@
 "use client";
+import { UpdateNotice } from "../components/update-notice";
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDownWideNarrow,
@@ -1063,6 +1064,7 @@ export default function Home() {
           </TabsContent>
         </Tabs>
         {!loading && !error && !canGenerate && <p role="status" className="drawer-note">{!data.generationAvailable ? "Cover-letter generation is not configured for this instance. Job tracking is available." : "To enable cover letters, save your name, résumé, and evidence approval in Preferences."}</p>}
+        {!loading && !error && <UpdateNotice />}
         <footer className="footer">
           <span>Signal · A personal job inbox</span>
           <span>Confidence ≠ hiring intent. Fit ≠ likelihood of an offer.</span>

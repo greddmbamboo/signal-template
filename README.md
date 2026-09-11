@@ -37,3 +37,9 @@ The suite uses local D1 and mocked external services. No cloud credentials are r
 ## Boundaries
 
 This is a private-instance template, not a shared commercial service. No billing, credits, automatic applications, or public signup. Résumés support pasted text and `.txt` import; native PDF/DOCX parsing and automatic portfolio fetching are not included. Feed coverage and location matching are approximate. Review job eligibility and every letter before use.
+
+## Updating an existing installation
+
+Signal 0.2.0 and later show an update notice when a newer stable release is available. Copy the update message into your assistant to start a guided update. Existing 0.1.0 installations need this first update manually: give [UPDATE-SIGNAL.md](https://raw.githubusercontent.com/greddmbamboo/signal-template/main/UPDATE-SIGNAL.md) to your assistant in your Signal project. No update is installed automatically.
+
+Maintainers: see [release instructions](docs/releasing.md).

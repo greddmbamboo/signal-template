@@ -143,3 +143,7 @@ Local migrations: `npm run db:local`. Schema changes: `npm run db:generate`, ins
 All profile text, jobs, notes, and letters are stored in your D1 database under the verified Access subject. You control the database and any backups. Replace or clear résumé/portfolio fields through Preferences; existing letters are separate records and remain until edited/cleared. Full account export/deletion UI is not included. The instance owner can export or delete their database through Cloudflare; backup retention follows their Cloudflare settings.
 
 The app sends generation requests with response storage disabled. This does not itself promise zero retention by the API provider; review your account's data settings before uploading sensitive material. No automatic job applications or scheduled crawling are performed.
+
+## Future updates
+
+Signal checks a public version file when you open the app and every six hours while it stays open. If an update is available, use **Copy update message** and give it to Codex or Claude Code in your Signal project. The assistant follows [UPDATE-SIGNAL.md](https://raw.githubusercontent.com/greddmbamboo/signal-template/main/UPDATE-SIGNAL.md). Nothing installs automatically. The check sends no job records, résumé, credentials, or installed version; GitHub receives ordinary request metadata such as your IP address.
