@@ -12,5 +12,4 @@
 
 Apply the new additive 0003 migration to the existing database after backing it up, following UPDATE-SIGNAL.md. It adds search_cache and search_usage only. Preserve all existing migration history, Access configuration, profiles, records, and secrets. Brave is optional and needs the installer's own server-side key. No OpenAI or personal credentials are distributed.
 
-This checkout retains standalone Cloudflare Access authentication, blank onboarding, evidence approval, saved letters, and the existing update checker. It does not copy private seed data or the private Sites deployment configuration. These changes are not advertised through release.json until a tested release is published.
-
+This checkout retains standalone Cloudflare Access authentication, blank onboarding, evidence approval, saved letters, and the existing update checker. It does not copy private seed data or the private Sites deployment configuration. These changes are published in Signal 0.3.0 and advertised through release.json.
