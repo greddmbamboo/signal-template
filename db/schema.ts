@@ -5,4 +5,6 @@ export const jobs = sqliteTable('jobs', {
  reason: text('reason').notNull().default(''), coverLetter: text('cover_letter').notNull().default(''), linkedinUrl: text('linkedin_url').notNull().default(''), linkedinId: text('linkedin_id').notNull().default(''), firstSeen: text('first_seen').notNull(), lastSeen: text('last_seen').notNull(), active: integer('active').notNull().default(1),
 }, t => [primaryKey({columns:[t.owner,t.id]})]);
 export const preferences = sqliteTable('preferences', {owner:text('owner').primaryKey(), payload:text('payload').notNull()});
+export const searchUsage = sqliteTable('search_usage',{month:text('month').primaryKey(),used:integer('used').notNull().default(0)});
+export const searchCache = sqliteTable('search_cache',{key:text('key').primaryKey(),payload:text('payload'),expires:integer('expires').notNull()});
 export const sources = sqliteTable('sources', {owner:text('owner').notNull(), id:text('id').notNull(), payload:text('payload').notNull()},t=>[primaryKey({columns:[t.owner,t.id]})]);

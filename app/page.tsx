@@ -19,7 +19,7 @@ import {
   RefreshCw,
   Save,
   Search,
-  Settings2,
+  Settings,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -29,6 +29,7 @@ import {
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -69,15 +70,18 @@ import {
   type Source,
 } from "@/lib/model";
 
+import {inboxDecision} from "@/lib/search-policy";
+import type {SearchReport} from "@/lib/brave-search";
 type InboxData = { jobs: Job[]; profile: Profile; sources: Source[]; generationAvailable?: boolean };
 const emptyManualJob = {
   url: "",
 };
 const stages = [
   { id: "inbox", label: "Inbox", icon: Inbox },
+  { id: "review", label: "Needs review", icon: Flag },
   { id: "applied", label: "Applied", icon: CheckCheck },
+  { id: "rejected", label: "Rejected", icon: X },
   { id: "passed", label: "Passed", icon: X },
-  { id: "flagged", label: "Flagged", icon: Flag },
 ];
 function dateLabel(value?: string) {
   return value
@@ -124,6 +128,8 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [progress, setProgress] = useState("");
+  const [searchInfo,setSearchInfo]=useState<{configured:boolean;usage:{remaining:number;limit:number};total:number}|null>(null);
+  const [searchReports,setSearchReports]=useState<SearchReport[]>([]);
   const [pending, setPending] = useState<string | null>(null);
   const [draft, setDraft] = useState<Profile>(defaultProfile);
   const [sourceDialog, setSourceDialog] = useState(false);
@@ -131,7 +137,7 @@ export default function Home() {
   const [boardUrl, setBoardUrl] = useState("");
   const [reasonDialog, setReasonDialog] = useState<{
     id: string;
-    status: "passed" | "flagged";
+    status: "passed" | "rejected";
   } | null>(null);
   const [reason, setReason] = useState("");
   const [coverJobId, setCoverJobId] = useState<string | null>(null);
@@ -143,6 +149,7 @@ export default function Home() {
     setData(next);
     setDraft(next.profile);
     if (!next.profile.onboardingComplete) setTab("profile");
+    try{const info=await request("/api/search");setSearchInfo(info);setSearchReports(info.reports||[]);}catch{setSearchInfo(null);}
     setError("");
     return next as InboxData;
   }
@@ -166,11 +173,12 @@ export default function Home() {
   const eligible = scored.filter((j) =>
     j.status === "inbox" &&
     j.active &&
-    (j.source === "manual" || matchesLocationPreference(j, data.profile)),
+    inboxDecision(j,data.profile)==="match",
   );
+  const reviewJobs=scored.filter(j=>j.status==="inbox"&&inboxDecision(j,data.profile)!=="excluded"&&(!j.active||inboxDecision(j,data.profile)==="review"));
   const visible = scored.filter(
     (j) =>
-      j.status === tab &&
+      (tab==="review"?reviewJobs.some(r=>r.id===j.id):j.status === tab) &&
       (tab !== "inbox" || eligible.some((eligibleJob) => eligibleJob.id === j.id)) &&
       `${j.title} ${j.company} ${j.location} ${j.description}`
         .toLowerCase()
@@ -217,7 +225,10 @@ export default function Home() {
       setPending(null);
     }
   }
-  function askReason(id: string, status: "passed" | "flagged") {
+  function askReason(
+    id: string,
+    status: "passed" | "rejected",
+  ) {
     setReason("");
     setReasonDialog({ id, status });
   }
@@ -226,25 +237,52 @@ export default function Home() {
     setError("");
     const list = one
       ? [one]
-      : [...data.sources].sort(
+      : [...data.sources].filter(s=>s.provider!=="brave").sort(
           (a, b) => Number(a.provider === "linkedin") - Number(b.provider === "linkedin"),
         );
     let failed = 0;
     try {
-      for (let i = 0; i < list.length; i++) {
-        setProgress(`Checking ${list[i].company} · ${i + 1} of ${list.length}`);
+      if(!one||one.provider==="brave"){
+        try{
+          const info=await request("/api/search");setSearchInfo(info);
+          if(!info.configured)throw new Error("Brave is not connected; only free feeds will be checked.");
+          setSearchReports([]);
+          for(let index=0;index<info.total;index++){
+            setProgress(`Searching the web · query ${index+1} of ${info.total}`);
+            let batch:number|null=0;
+            do{
+              const result=await request("/api/search",{index,batch});
+              setSearchReports(r=>[...r,result.report]);
+              batch=result.nextBatch;
+            }while(batch!==null);
+          }
+        }catch(e){failed++;toast.error((e as Error).message);}
+      }
+      const feeds=list.filter(s=>s.provider!=="brave");
+      for (let i = 0; i < feeds.length; i++) {
+        setProgress(`Checking ${feeds[i].company} · ${i + 1} of ${feeds.length}`);
         try {
-          await request("/api/refresh", { source: list[i].id });
+          await request("/api/refresh", { source: feeds[i].id });
         } catch (e) {
           failed++;
           toast.error((e as Error).message);
         }
       }
+      if(!one){
+        try{
+          const queue=await request("/api/search",{action:"followupQueue"});
+          for(let i=0;i<queue.ids.length;i++){
+            setProgress(`Checking employer sites · ${i+1} of ${queue.ids.length}`);
+            await request("/api/search",{action:"verify",id:queue.ids[i]});
+          }
+          if(queue.deferred)toast.info(`${queue.deferred} employer checks deferred to a later refresh.`);
+        }catch(e){failed++;toast.error((e as Error).message);}
+      }
       await load();
       setProgress(
         failed
-          ? `${list.length - failed} sources checked; ${failed} need attention in Sources.`
-          : `${list.length} search sources checked just now.`,
+          ? `Search partially completed; ${failed} checks need attention. See Sources.`
+          : "Search complete. See Sources for queries, limits, and verification details.",
       );
       if (!failed) toast.success("Source checks complete");
     } catch (e) {
@@ -439,80 +477,31 @@ export default function Home() {
         <div className="private">
           <LockKeyhole size={14} />
           <span>Private workspace</span>
-          <span className="avatar">GR</span>
+          <span className="avatar">{data.profile.name?.trim().split(/\s+/).slice(0,2).map(part=>part[0]).join("").toUpperCase() || "S"}</span>
         </div>
       </header>
       <main className="page">
-        <div className="intro">
+        <div className="jobs-header">
           <div>
-            <div className="eyebrow">Workspace overview</div>
-            <h1>Job search activity</h1>
-            <p>
-              {loading
-                ? "Loading your latest search activity…"
-                : latestSourceCheck
-                  ? `Sources last checked ${dateLabel(latestSourceCheck)}.`
-                  : "Run your first source check to find current roles."}
-            </p>
+            <h1>Your jobs</h1>
+            <p className="subtle">{loading ? "Loading…" : latestSourceCheck ? `Last checked ${dateLabel(latestSourceCheck)}` : "No searches yet"}</p>
           </div>
-          <div className="stats">
-            <div className="stat">
-              <strong>
-                {loading
-                  ? "—"
-                  : eligible.length}
-              </strong>
-              <span>active listings found</span>
-            </div>
-            <div className="stat">
-              <strong>
-                {loading
-                  ? "—"
-                  : data.jobs.filter((j) => j.status === "passed").length}
-              </strong>
-              <span>passed on</span>
-            </div>
-            <div className="stat">
-              <strong>
-                {loading
-                  ? "—"
-                  : data.jobs.filter((j) => j.status === "applied").length}
-              </strong>
-              <span>applications tracked</span>
-            </div>
-          </div>
-        </div>
-        <Tabs
-          value={tab}
-          onValueChange={(v) => {
-            setTab(v);
-            setQuery("");
-          }}
-          className="workspace-tabs"
-        >
-          <div className="navstrip">
-            <TabsList>
-              {stages.map((s) => (
-                <TabsTrigger key={s.id} value={s.id}>
-                  <s.icon size={15} />
-                  {s.label}
-                  <span className="tabcount">
-                    {s.id === "inbox"
-                      ? eligible.length
-                      : data.jobs.filter((j) => j.status === s.id).length}
-                  </span>
-                </TabsTrigger>
-              ))}
-              <TabsTrigger value="sources">
-                <Globe2 size={15} />
-                Sources
-              </TabsTrigger>
-              <TabsTrigger value="profile">
-                <Settings2 size={15} />
-                Preferences
-              </TabsTrigger>
-            </TabsList>
             <div className="nav-actions">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" aria-label="Settings" title="Settings" className="settings-trigger !bg-transparent !border-0 !shadow-none">
+                    <Settings size={18} aria-hidden="true" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="settings-menu">
+                  <DropdownMenuItem onSelect={() => { setTab("sources"); setQuery(""); }}>
+                    <Globe2 size={16} /> Sources
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => { setTab("profile"); setQuery(""); }}>
+                    <SlidersHorizontal size={16} /> Preferences
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button variant="outline" onClick={() => setManualDialog(true)}>
                 <Plus size={15} />
                 Add job
@@ -527,7 +516,31 @@ export default function Home() {
                 />
                 {refreshing ? "Checking sources…" : "Check for jobs"}
               </Button>
+
             </div>
+        </div>
+        <Tabs
+          value={tab}
+          onValueChange={(v) => {
+            setTab(v);
+            setQuery("");
+          }}
+          className="workspace-tabs"
+        >
+          <div className="navstrip">
+            <TabsList aria-label="Filter jobs by status">
+              {stages.map((s) => (
+                <TabsTrigger key={s.id} value={s.id}>
+                  {s.label}
+                  <span className="tabcount">
+                    {s.id === "inbox"
+                      ? eligible.length
+                      : s.id==="review"?reviewJobs.length:data.jobs.filter((j) => j.status === s.id).length}
+                  </span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+
           </div>
           {error && (
             <div className="message" role="alert">
@@ -554,13 +567,12 @@ export default function Home() {
               )}
             </div>
           )}
-          <div className="statusline" role="status">
-            <span className="dot" />
-            {progress ||
-              (loading
-                ? "Opening your inbox…"
-                : "Market-wide discovery · Best-fit ranking · No automatic applications")}
-          </div>
+          {(progress || loading) && (
+            <div className="statusline" role="status">
+              {refreshing && <RefreshCw size={14} className="spin" />}
+              {progress || "Opening your inbox…"}
+            </div>
+          )}
           {stages.map((stage) => (
             <TabsContent key={stage.id} value={stage.id}>
               <div className="workspace">
@@ -613,7 +625,7 @@ export default function Home() {
                             </div>
                             <div className="jobfoot">
                               <span
-                                className={`badge ${!j.active || j.score.quality < data.profile.minQuality ? "warn" : ""}`}
+                                className={`badge ${j.active && j.verification === "employer" ? "" : "warn"}`}
                               >
                                 <ShieldCheck size={12} />
                                 {j.origin === "linkedin"
@@ -625,9 +637,10 @@ export default function Home() {
                                     ? "Official ATS listing"
                                     : "Manually added"
                                   : j.active
-                                    ? "Market listing found"
-                                    : "No longer in feed"}
+                                    ? j.verification==="employer"?"Employer page checked":"Market listing found · unverified"
+                                    : "Availability unknown · needs recheck"}
                               </span>
+                              {j.verificationReason && j.verification !== "employer" && <span className="badge warn">{j.verificationReason}</span>}
                               {j.linkedinUrl && (
                                 <span className="badge linkedin">
                                   LinkedIn + employer match
@@ -664,20 +677,28 @@ export default function Home() {
                               className="text-action"
                               disabled={pending === j.id}
                               onClick={() =>
-                                j.status === "passed" || j.status === "flagged"
+                                j.status === "passed"
                                   ? changeStatus(j.id, "inbox")
-                                  : askReason(j.id, "passed")
+                                  : j.status === "rejected"
+                                    ? changeStatus(j.id, "applied")
+                                    : j.status === "applied"
+                                      ? askReason(j.id, "rejected")
+                                      : askReason(j.id, "passed")
                               }
                             >
                               {j.status === "passed" ||
-                              j.status === "flagged" ? (
+                              j.status === "rejected" ? (
                                 <ArrowRight size={14} />
                               ) : (
                                 <X size={14} />
                               )}{" "}
-                              {j.status === "passed" || j.status === "flagged"
-                                ? "Restore"
-                                : "Pass"}
+                              {j.status === "rejected"
+                                ? "Return to applied"
+                                : j.status === "applied"
+                                  ? "Mark rejected"
+                                : j.status === "passed"
+                                  ? "Restore"
+                                  : "Pass"}
                             </button>
                             <button
                               className="text-action detail"
@@ -704,7 +725,7 @@ export default function Home() {
                           {query
                             ? "Try a different search."
                             : stage.id === "inbox"
-                              ? "Check company sources or broaden your preferences."
+                              ? "Check for jobs, or review listings with uncertain eligibility in Needs review."
                               : "Use the actions on a listing to move it here."}
                         </EmptyDescription>
                       </EmptyHeader>
@@ -781,16 +802,17 @@ export default function Home() {
               </div>
             </TabsContent>
           ))}
-          <TabsContent value="sources">
+          {tab === "sources" && <section aria-label="Sources">
             <section className="content-panel">
+              <p className="subtle">{searchInfo?`${searchInfo.configured?"Brave connected":"Brave not connected"} · ${searchInfo.usage.remaining} of ${searchInfo.usage.limit} app requests remaining this UTC month`:"Brave search status unavailable"}</p>
+              <p className="subtle">24-hour search cache · Up to 24 discovery searches plus 20 employer follow-up searches per refresh · Up to 20 results per query, checked in batches of 6. Counts below are per-query observations, not unique jobs. Free-budget protection covers this installation only; use a dedicated key/account budget.</p>
+              <a href="https://brave.com/search/api/" target="_blank" rel="noopener noreferrer">Powered by Brave Search</a>
+              {searchReports.length>0&&<details><summary>Last search: {searchReports.length} query batches processed</summary>{searchReports.map((r,i)=><div key={i} className="side-section"><strong>{r.query} · page {r.page+1}{r.cached?" · cached":""}</strong><p>{r.returned} results · {r.checked} pages checked · {r.saved} matching · {r.review} need review · {r.excluded} excluded · {r.deferred} remaining in this query when this batch finished</p>{r.issues.map((issue,k)=><p key={k}><a href={issue.url} target="_blank" rel="noopener noreferrer">Review result</a>: {issue.reason}</p>)}</div>)}</details>}
               <div className="panel-heading">
                 <div>
-                  <h2>Go straight to the source.</h2>
+                  <h2>Search coverage and usage</h2>
                   <p className="subtle">
-                    Three market-wide searches discover roles without a company
-                    list. Add interesting LinkedIn roles by URL; Signal imports,
-                    scores, and de-duplicates them. Employer ATS links verify
-                    matches when available.
+                    Brave searches by role and location, without a company list. After discovery, Signal checks application links and searches for matching employer listings for up to 20 relevant unverified jobs. Checks are cached for 24 hours and share the same monthly allowance. LinkedIn remains manual. Search absence never means a job has closed.
                   </p>
                 </div>
                 <div className="nav-actions">
@@ -805,7 +827,7 @@ export default function Home() {
                 </div>
               </div>
               <div className="sourcegrid">
-                {data.sources.map((s) => (
+                {data.sources.filter((s) => s.provider !== "brave").map((s) => (
                   <article className="sourcecard" key={s.id}>
                     <div className="sourcehead">
                       <div className="company-icon">
@@ -874,14 +896,14 @@ export default function Home() {
                 ))}
               </div>
               <p className="subtle" style={{ marginTop: 24 }}>
-                Greenhouse, Lever, and Ashby are supported. A failed check keeps
-                existing listings. A successful check marks missing requisitions
-                as no longer in the feed. Repeated requisition IDs are updated
-                in place.
+                Greenhouse, Lever, and Ashby are supported. Existing listings
+                stay in your workspace even when absent from a later search.
+                Repeated requisition IDs are updated in place without changing
+                your application status, notes, or cover letter.
               </p>
             </section>
-          </TabsContent>
-          <TabsContent value="profile">
+          </section>}
+          {tab === "profile" && <section aria-label="Preferences">
             <section className="content-panel">
               <div className="panel-heading">
                 <div>
@@ -1061,7 +1083,7 @@ export default function Home() {
                 </div>
               </form>
             </section>
-          </TabsContent>
+          </section>}
         </Tabs>
         {!loading && !error && !canGenerate && <p role="status" className="drawer-note">{!data.generationAvailable ? "Cover-letter generation is not configured for this instance. Job tracking is available." : "To enable cover letters, save your name, résumé, and evidence approval in Preferences."}</p>}
         {!loading && !error && <UpdateNotice />}
@@ -1086,7 +1108,7 @@ export default function Home() {
               <SheetDescription>{selected.location}</SheetDescription>
               <div className="job-meta">
                 <span>{selected.salary}</span>
-                <span className={`badge ${selected.active ? "" : "warn"}`}>
+                <span className={`badge ${selected.active && selected.verification === "employer" ? "" : "warn"}`}>
                   <ShieldCheck size={12} />
                   {selected.origin === "linkedin"
                     ? officialListingProvider(selected)
@@ -1097,10 +1119,12 @@ export default function Home() {
                       ? `Verified on ${officialListingProvider(selected)}`
                       : "Manually added"
                     : selected.active
-                      ? "Found in market search"
-                      : "No longer in latest feed"}
+                      ? selected.verification === "employer" ? "Employer page checked" : "Market listing found · unverified"
+                      : "Availability unknown · needs recheck"}
                 </span>
               </div>
+              {selected.verificationReason && <p className="subtle">{selected.verificationReason}</p>}
+              {selected.discoveryUrl && selected.discoveryUrl !== selected.url && <a href={selected.discoveryUrl} target="_blank" rel="noopener noreferrer">Original discovery listing ↗</a>}
               <div className="detail-actions">
                 <a
                   href={selected.url}
@@ -1143,28 +1167,37 @@ export default function Home() {
                   onClick={() =>
                     changeStatus(
                       selected.id,
-                      selected.status === "applied" ? "inbox" : "applied",
+                      selected.status === "applied"
+                        ? "inbox"
+                        : "applied",
                     )
                   }
                 >
                   <Check size={15} />
                   {selected.status === "applied"
                     ? "Undo applied"
+                    : selected.status === "rejected"
+                      ? "Return to applied"
                     : "Mark applied"}
                 </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => askReason(selected.id, "passed")}
-                >
-                  Pass
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => askReason(selected.id, "flagged")}
-                >
-                  <Flag size={14} />
-                  Flag
-                </Button>
+                {selected.status === "applied" && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => askReason(selected.id, "rejected")}
+                  >
+                    <X size={14} />
+                    Mark rejected
+                  </Button>
+                )}
+                {selected.status !== "applied" &&
+                  selected.status !== "rejected" && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => askReason(selected.id, "passed")}
+                    >
+                      Pass
+                    </Button>
+                  )}
               </div>
               <p className="external-note">
                 <ArrowUpRight size={13} /> Employer links open in a new tab in
@@ -1418,13 +1451,13 @@ export default function Home() {
       >
         <DialogContent>
           <DialogTitle>
-            {reasonDialog?.status === "flagged"
-              ? "Flag this listing"
+            {reasonDialog?.status === "rejected"
+                ? "Mark this application as rejected"
               : "Pass on this job"}
           </DialogTitle>
           <DialogDescription>
-            {reasonDialog?.status === "flagged"
-              ? "Keep a note about what looks wrong. A flag is your assessment, not a verified fraud finding."
+            {reasonDialog?.status === "rejected"
+                ? "Add an optional note so you can remember where the process ended."
               : "Your reason stays with the job. This version records feedback; it does not train a ranking model."}
           </DialogDescription>
           <form
@@ -1444,15 +1477,15 @@ export default function Home() {
                 onChange={(e) => setReason(e.target.value)}
                 maxLength={500}
                 placeholder={
-                  reasonDialog?.status === "flagged"
-                    ? "For example: posting contradicts the careers page"
+                  reasonDialog?.status === "rejected"
+                      ? "For example: rejected after the portfolio review"
                     : "For example: onsite requirement, wrong level, or low pay"
                 }
               />
             </div>
             <Button type="submit" className="mt-5" disabled={!!pending}>
-              {reasonDialog?.status === "flagged"
-                ? "Flag listing"
+              {reasonDialog?.status === "rejected"
+                  ? "Mark rejected"
                 : "Pass on job"}
             </Button>
           </form>

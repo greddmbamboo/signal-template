@@ -30,11 +30,15 @@ test('built app: qualified discovery, tracking preservation, canonical imports, 
  try{
   const db=await mf.getD1Database('DB');const migrations=(await readdir('drizzle')).filter(name=>name.endsWith('.sql')).sort();for(const migration of migrations){const sql=await readFile(join('drizzle',migration),'utf8');for(const statement of sql.split('--> statement-breakpoint'))await db.prepare(statement.trim()).run();}
   const call=(path,body,owner='test-owner@example.invalid')=>mf.dispatchFetch(`http://signal.test${path}`,{method:body?'POST':'GET',headers:{...(owner?{'cf-access-jwt-assertion':tokens[owner]}:{}),...(body?{'Content-Type':'application/json',Origin:'http://signal.test'}:{})},body:body?JSON.stringify(body):undefined});
-  const page=await call('/');assert.equal(page.status,200);assert.match(await page.text(),/Job search activity/);
+  const page=await call('/');assert.equal(page.status,200);assert.match(await page.text(),/Your jobs/);
   assert.equal((await call('/api/inbox',undefined,null)).status,401);
+  assert.equal((await call('/api/search',undefined,null)).status,401);
+  assert.equal((await call('/api/search',{index:0},null)).status,401);
   const forged=await mf.dispatchFetch('http://signal.test/api/inbox',{headers:{'oai-authenticated-user-email':'forged@example.invalid','oai-authenticated-user-id':'forged','cf-access-authenticated-user-email':'forged@example.invalid'}});assert.equal(forged.status,401);
   for(const invalid of [tokens['test-owner@example.invalid'].slice(0,-8)+'tampered', await new SignJWT({email:'bad@example.invalid',type:'app'}).setProtectedHeader({alg:'RS256',kid:'test-key'}).setSubject('bad').setIssuer('https://test.cloudflareaccess.com').setAudience('wrong').setIssuedAt().setExpirationTime('1h').sign(privateKey), await new SignJWT({email:'bad@example.invalid',type:'app'}).setProtectedHeader({alg:'RS256',kid:'test-key'}).setSubject('bad').setIssuer('https://test.cloudflareaccess.com').setAudience('test-audience').setIssuedAt().setExpirationTime(1).sign(privateKey)]){assert.equal((await mf.dispatchFetch('http://signal.test/api/inbox',{headers:{'cf-access-jwt-assertion':invalid}})).status,401);}
   const initial=await call('/api/inbox');assert.equal(initial.status,200);const state=await initial.json();assert.equal(state.jobs.length,0);assert.equal(state.sources.length,3);assert.equal(state.profile.resume,'');assert.equal(state.profile.name,'');assert.equal(state.profile.onboardingComplete,false);
+  const searchStatus=await call('/api/search');assert.equal(searchStatus.status,200);assert.equal((await searchStatus.json()).configured,false);
+  assert.equal((await call('/api/search',{index:0})).status,503);
   const chosenProfile={...state.profile,roles:'Product Designer',location:'preferred',preferredLocations:'USA',name:'Alex Example',resume:'Private test résumé',onboardingComplete:true};
   assert.equal((await call('/api/inbox',{action:'profile',profile:chosenProfile})).status,200);
   jobicyJobs=[
@@ -42,7 +46,7 @@ test('built app: qualified discovery, tracking preservation, canonical imports, 
    {id:'uk-role',companyName:'UK Example',jobTitle:'Senior Product Designer',jobGeo:'London',url:'https://jobicy.com/jobs/uk-role',jobDescription:'Design systems '.repeat(100),pubDate:'2026-09-07T10:00:00Z'},
   ];
   const refreshed=await call('/api/refresh',{source:'jobicy:discovery'});assert.equal(refreshed.status,200,await refreshed.text());
-  const discovered=await (await call('/api/inbox')).json();assert.equal(discovered.jobs.length,1);const job=discovered.jobs[0];assert.equal(job.company,'US Example');assert.match(job.location,/USA/);assert.equal(job.salaryMax,undefined);assert.match(job.salary,/hourly/);
+  const discovered=await (await call('/api/inbox')).json();assert.equal(discovered.jobs.length,2);const job=discovered.jobs.find(j=>j.company==='US Example');assert.equal(job.company,'US Example');assert.match(job.location,/USA/);assert.equal(job.salaryMax,undefined);assert.match(job.salary,/hourly/);
   assert.equal((await call('/api/inbox',{action:'status',id:job.id,status:'applied'})).status,200);
   jobicyStatus=503;assert.equal((await call('/api/refresh',{source:'jobicy:discovery'})).status,502);
   const afterFailure=await (await call('/api/inbox')).json();assert.equal(afterFailure.jobs.find(item=>item.id===job.id).active,1);assert.equal(afterFailure.jobs.find(item=>item.id===job.id).status,'applied');

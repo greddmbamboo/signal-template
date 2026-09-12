@@ -4,6 +4,7 @@ export async function initialize(owner:string){
  const db=getSql();
  await db.batch([
   db.prepare('INSERT INTO preferences (owner,payload) VALUES (?,?) ON CONFLICT DO NOTHING').bind(owner,JSON.stringify(defaultProfile)),
+  db.prepare("UPDATE jobs SET status = 'inbox' WHERE owner = ? AND status IN ('saved','flagged')").bind(owner),
   ...defaultSources.map(source=>db.prepare('INSERT INTO sources (owner,id,payload) VALUES (?,?,?) ON CONFLICT DO NOTHING').bind(owner,source.id,JSON.stringify(source)))
  ]);
 }
@@ -12,7 +13,7 @@ export async function getSource(owner:string,id:string){const row=await getSql()
 export async function getProfile(owner:string){const row=await getSql().prepare('SELECT payload FROM preferences WHERE owner = ?').bind(owner).first<{payload:string}>();return row?JSON.parse(row.payload) as Profile:defaultProfile;}
 export async function recordSourceError(owner:string,source:Source,error:string){await getSql().prepare('UPDATE sources SET payload = ? WHERE owner = ? AND id = ?').bind(JSON.stringify({...source,error}),owner,source.id).run();}
 export async function saveFeed(owner:string,source:Source,found:Job[]){
- const db=getSql();const now=new Date().toISOString();const statements=[db.prepare('UPDATE jobs SET active = 0 WHERE owner = ? AND source = ?').bind(owner,source.id)];
- for(const j of found){const {status,reason,coverLetter='',linkedinUrl='',linkedinId='',firstSeen,lastSeen,active,...payload}=j;statements.push(db.prepare('INSERT INTO jobs (owner,id,source,payload,status,reason,cover_letter,linkedin_url,linkedin_id,first_seen,last_seen,active) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(owner,id) DO UPDATE SET payload=excluded.payload,last_seen=excluded.last_seen,active=1').bind(owner,j.id,j.source,JSON.stringify(payload),status,reason,coverLetter,linkedinUrl,linkedinId,firstSeen,lastSeen,active));}
+ const db=getSql();const now=new Date().toISOString();const statements: D1PreparedStatement[]=[];
+ for(const j of found){const {status,reason,coverLetter='',linkedinUrl='',linkedinId='',firstSeen,lastSeen,active,...payload}=j;statements.push(db.prepare(`INSERT INTO jobs (owner,id,source,payload,status,reason,cover_letter,linkedin_url,linkedin_id,first_seen,last_seen,active) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(owner,id) DO UPDATE SET payload=CASE WHEN json_extract(jobs.payload,'$.verification')='employer' AND COALESCE(json_extract(excluded.payload,'$.verification'),'unverified')!='employer' THEN jobs.payload ELSE json_patch(excluded.payload,json_object('verificationCheckedAt',json_extract(jobs.payload,'$.verificationCheckedAt'),'verificationReason',json_extract(jobs.payload,'$.verificationReason'),'discoveryUrl',json_extract(jobs.payload,'$.discoveryUrl'))) END,last_seen=CASE WHEN json_extract(jobs.payload,'$.verification')='employer' AND COALESCE(json_extract(excluded.payload,'$.verification'),'unverified')!='employer' THEN jobs.last_seen ELSE excluded.last_seen END,active=1`).bind(owner,j.id,j.source,JSON.stringify(payload),status,reason,coverLetter,linkedinUrl,linkedinId,firstSeen,lastSeen,active));}
  const next={...source,checkedAt:now,count:found.length,error:undefined};statements.push(db.prepare('UPDATE sources SET payload = ? WHERE owner = ? AND id = ?').bind(JSON.stringify(next),owner,source.id));await db.batch(statements);return next;
 }
