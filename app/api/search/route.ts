@@ -18,7 +18,7 @@ export async function POST(request:Request){
   const text=await request.text();if(text.length>1000)return Response.json({error:'Request too long.'},{status:413});
   const body=JSON.parse(text);
   if(body.action==='followupQueue')return Response.json(await followupQueue(user.id));
-  if(body.action==='verify'){if(typeof body.id!=='string'||body.id.length>250)return Response.json({error:'Invalid listing.'},{status:400});return Response.json(await verifyStoredJob(user.id,body.id,key));}
+  if(body.action==='verify'){if(typeof body.id!=='string'||body.id.length>250)return Response.json({error:'Invalid listing.'},{status:400});return Response.json(await verifyStoredJob(user.id,body.id,key,env.OPENAI_API_KEY||''));}
   if(!key)return Response.json({error:'Brave is not connected. Free feeds still work.'},{status:503});
   if(!Number.isInteger(body.index)||body.index<0||body.index>=24)return Response.json({error:'Invalid search step.'},{status:400});
   const batch=body.batch??0;if(!Number.isInteger(batch)||batch<0||batch>3)return Response.json({error:'Invalid search batch.'},{status:400});

@@ -5,6 +5,7 @@ import {searchPage} from './brave-search';
 import {readInbox,getProfile} from './store';
 import {canonicalJobUrl,inboxDecision,listingCandidate,SEARCH_CACHE_MS} from './search-policy';
 import {type Job} from './model';
+import {evaluateJob,pendingEvaluation} from './job-evaluation';
 
 export const FOLLOWUP_LIMIT=20;
 type Imported=Awaited<ReturnType<typeof importJobUrl>>;
@@ -37,7 +38,7 @@ export async function followEmployer(job:Job,apiKey:string):Promise<Outcome>{
  }catch(error){return {reason:error instanceof Error?error.message:'Employer follow-up search unavailable.',checkedAt:new Date().toISOString(),searches};}
  return {employer:matches.size===1?[...matches.values()][0]:undefined,reason:matches.size>1?'Multiple employer openings match; the correct requisition is unclear.':matches.size===1?'Matched company, role and requisition or location/description on the employer listing.':blocked?'Could not confirm the same opening; some pages were blocked, unavailable, or lacked job data.':'No sufficiently close employer match found. This does not mean the job is closed.',checkedAt:new Date().toISOString(),searches};
 }
-export async function verifyStoredJob(owner:string,id:string,apiKey:string){
+export async function verifyStoredJob(owner:string,id:string,apiKey:string,openaiKey=''){
  const db=getSql();const row=await db.prepare('SELECT payload,status,active,last_seen FROM jobs WHERE owner=? AND id=?').bind(owner,id).first<{payload:string;status:string;active:number;last_seen:string}>();
  if(!row)throw new Error('Listing not found.');
  const payload=JSON.parse(row.payload);const job={...payload,id,status:row.status,active:row.active,lastSeen:row.last_seen} as Job;
@@ -51,10 +52,10 @@ export async function verifyStoredJob(owner:string,id:string,apiKey:string){
   try{outcome=await followEmployer(job,apiKey);await db.prepare('UPDATE search_cache SET payload=?,expires=? WHERE key=?').bind(JSON.stringify(outcome),Date.now()+SEARCH_CACHE_MS,key).run();}
   catch(error){await db.prepare('DELETE FROM search_cache WHERE key=? AND payload IS NULL').bind(key).run();throw error;}
  }
- const update={...payload,...(outcome.employer||{}),source:job.source,origin:job.origin,discoveryUrl:job.discoveryUrl||job.url,verificationCheckedAt:outcome.checkedAt,verificationReason:outcome.reason,...(outcome.employer?{url:canonicalJobUrl(outcome.employer.url),verifiedAt:outcome.checkedAt}:{} )};
+ const profile=await getProfile(owner);const updatedJob={...job,...payload,...(outcome.employer||{}),url:outcome.employer?canonicalJobUrl(outcome.employer.url):job.url,verificationCheckedAt:outcome.checkedAt,verificationReason:outcome.reason} as Job;let evaluation=payload.evaluation;if(outcome.employer){try{evaluation=await evaluateJob(updatedJob,profile,openaiKey)}catch{evaluation=pendingEvaluation(updatedJob,profile,'Employer listing verified; skill analysis needs another try.')}}
+ const update={...payload,...(outcome.employer||{}),source:job.source,origin:job.origin,discoveryUrl:job.discoveryUrl||job.url,verificationCheckedAt:outcome.checkedAt,verificationReason:outcome.reason,evaluation,...(outcome.employer?{url:canonicalJobUrl(outcome.employer.url),verifiedAt:outcome.checkedAt}:{} )};
  // Update only imported facts; statuses, notes, letters and record IDs stay untouched.
  // Compare-and-swap avoids overwriting a concurrent import/edit of those facts.
  await db.prepare('UPDATE jobs SET payload=?,last_seen=CASE WHEN ? THEN ? ELSE last_seen END WHERE owner=? AND id=? AND payload=?').bind(JSON.stringify(update),outcome.employer?1:0,outcome.checkedAt,owner,id,row.payload).run();
  return {id,company:job.company,title:job.title,verified:Boolean(outcome.employer),reason:outcome.reason,cached,searches:cached?0:outcome.searches};
 }
-

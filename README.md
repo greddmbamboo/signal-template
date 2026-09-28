@@ -20,11 +20,12 @@ You can also [read the setup file](SET-UP-SIGNAL.md), or open it above and use *
 
 - Cloudflare Workers and D1, with Cloudflare Access email-PIN authentication.
 - Empty first-run onboarding with installer-defined roles and locations.
-- Optional Brave web discovery plus Jobicy, Remote OK, and Arbeitnow feeds; employer-site follow-up; manual imports including Dayforce.
-- Inbox, Needs review, Applied, Rejected, and Passed filters; Sources and Preferences under Settings.
+- Optional Brave web discovery plus Jobicy, Remote OK, and Arbeitnow feeds; employer-site follow-up; broad full-page manual imports across common ATS and employer wrappers.
+- Inbox, Needs review, Applied, In Progress, Rejected, and Passed filters; Sources and Preferences under Settings.
+- Evidence-based job evaluation: skill fit comes from responsibilities matched to approved résumé/portfolio evidence, while location eligibility and listing legitimacy remain separate gates.
 - [Optional Brave setup and search limits](docs/brave-search.md).
 - Private job status, notes, and saved cover letters scoped to verified identity.
-- Optional AI generation from approved evidence; tracking works without an API key.
+- Optional AI job analysis and cover-letter generation from approved evidence; tracking works without an API key.
 - Editable letters and PDF export.
 
 ## Checks

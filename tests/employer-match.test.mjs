@@ -10,9 +10,10 @@ test('employer match requires company, level, and corroborating requisition or c
  for(const change of [{company:'Other'},{title:'Staff Product Designer'},{location:'London'},{description:'Unrelated opening'},{verification:'unverified'}])assert.equal(sameOpening(job,{...employer,...change}),false);
  assert.equal(sameOpening({...job,requisitionId:'1'},{...employer,requisitionId:'2'}),false);
  assert.equal(sameOpening({...job,requisitionId:'1'},{...employer,requisitionId:'1'}),true);
+ const corrected={...employer,location:'San Francisco',description:`${description} This is a hybrid role with regular collaboration in the San Francisco office.`};
+ assert.equal(sameOpening(job,corrected),true);
 });
 test('application candidates are bounded public HTTPS links and never LinkedIn',()=>{
  const html='<a href="https://jobs.ashbyhq.com/example/1">Apply</a><a href="http://localhost/x">Apply</a><a href="https://www.linkedin.com/jobs/1">Apply</a><a href="https://127.0.0.1/secret">Apply</a><a href="javascript:alert(1)">Apply</a>';
  assert.deepEqual(applicationLinks(html,'https://aggregator.example/jobs/1'),['https://jobs.ashbyhq.com/example/1']);
 });
-

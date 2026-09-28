@@ -62,9 +62,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   defaultProfile,
+  currentEvaluation,
+  locationSignal,
   matchesLocationPreference,
   officialListingProvider,
-  scoreJob,
   type Job,
   type Profile,
   type Source,
@@ -72,6 +73,7 @@ import {
 
 import {inboxDecision} from "@/lib/search-policy";
 import type {SearchReport} from "@/lib/brave-search";
+
 type InboxData = { jobs: Job[]; profile: Profile; sources: Source[]; generationAvailable?: boolean };
 const emptyManualJob = {
   url: "",
@@ -80,6 +82,7 @@ const stages = [
   { id: "inbox", label: "Inbox", icon: Inbox },
   { id: "review", label: "Needs review", icon: Flag },
   { id: "applied", label: "Applied", icon: CheckCheck },
+  { id: "in_progress", label: "In Progress", icon: CheckCheck },
   { id: "rejected", label: "Rejected", icon: X },
   { id: "passed", label: "Passed", icon: X },
 ];
@@ -161,11 +164,10 @@ export default function Home() {
   const scored = useMemo(
     () =>
       data.jobs
-        .map((j) => ({ ...j, score: scoreJob(j, data.profile) }))
+        .map((j) => ({ ...j, analysis: currentEvaluation(j, data.profile), loc: locationSignal(j, data.profile) }))
         .sort(
           (a, b) =>
-            b.score.fit - a.score.fit ||
-            b.score.quality - a.score.quality ||
+            (b.analysis?.skill.score ?? -1) - (a.analysis?.skill.score ?? -1) ||
             b.lastSeen.localeCompare(a.lastSeen),
         ),
     [data.jobs, data.profile],
@@ -180,7 +182,7 @@ export default function Home() {
     (j) =>
       (tab==="review"?reviewJobs.some(r=>r.id===j.id):j.status === tab) &&
       (tab !== "inbox" || eligible.some((eligibleJob) => eligibleJob.id === j.id)) &&
-      `${j.title} ${j.company} ${j.location} ${j.description}`
+      `${j.title} ${j.company} ${j.loc.location} ${j.description}`
         .toLowerCase()
         .includes(query.toLowerCase()),
   );
@@ -208,7 +210,7 @@ export default function Home() {
       }));
       setReasonDialog(null);
       toast.success(
-        status === "inbox" ? "Returned to inbox" : `Moved to ${status}`,
+        status === "inbox" ? "Returned to inbox" : `Moved to ${status === "in_progress" ? "In Progress" : status}`,
         {
           action: {
             label: "Undo",
@@ -277,6 +279,13 @@ export default function Home() {
           }
           if(queue.deferred)toast.info(`${queue.deferred} employer checks deferred to a later refresh.`);
         }catch(e){failed++;toast.error((e as Error).message);}
+        try{
+          const queue=await request("/api/inbox",{action:"evaluationQueue"});
+          for(let i=0;i<queue.ids.length;i++){
+            setProgress(`Analyzing job evidence · ${i+1} of ${queue.ids.length}`);
+            await request("/api/inbox",{action:"evaluateJob",id:queue.ids[i]});
+          }
+        }catch(e){failed++;toast.error((e as Error).message);}
       }
       await load();
       setProgress(
@@ -291,8 +300,13 @@ export default function Home() {
       setRefreshing(false);
     }
   }
+  async function analyzeJob(id:string){
+    setPending(`evaluate:${id}`);
+    try{const result=await request("/api/inbox",{action:"evaluateJob",id});setData(d=>({...d,jobs:d.jobs.map(job=>job.id===id?{...job,evaluation:result.evaluation}:job)}));toast.success("Listing analyzed from the full job description.");}
+    catch(e){toast.error((e as Error).message);}finally{setPending(null);}
+  }
   async function resetSearch() {
-    if (!window.confirm("Clear every discovered listing except jobs you applied to or added manually, then run a fresh search?")) return;
+    if (!window.confirm("Clear every discovered listing except applied, in-progress, rejected, or manually added jobs, then run a fresh search?")) return;
     setPending("reset-search");
     try {
       await request("/api/inbox", { action: "resetSearch" });
@@ -309,10 +323,11 @@ export default function Home() {
     e.preventDefault();
     setPending("profile");
     try {
-      await request("/api/inbox", { action: "profile", profile: { ...draft, onboardingComplete: true } });
-      setData((d) => ({ ...d, profile: { ...draft, onboardingComplete: true } }));
+      const profile = { ...draft, onboardingComplete: true };
+      await request("/api/inbox", { action: "profile", profile });
+      setData((d) => ({ ...d, profile }));
       setTab("inbox");
-      toast.success("Preferences saved. Your inbox has been re-ranked.");
+      toast.success("Preferences saved. Listings will be re-analyzed against the new evidence.");
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -476,7 +491,7 @@ export default function Home() {
         </div>
         <div className="private">
           <LockKeyhole size={14} />
-          <span>Private workspace</span>
+          <span>{data.profile.name?.trim() || "Private workspace"}</span>
           <span className="avatar">{data.profile.name?.trim().split(/\s+/).slice(0,2).map(part=>part[0]).join("").toUpperCase() || "S"}</span>
         </div>
       </header>
@@ -619,7 +634,7 @@ export default function Home() {
                             <div className="job-meta">
                               <span>
                                 <MapPin size={14} />
-                                {j.location}
+                                {j.loc.location}
                               </span>
                               <span>{j.salary}</span>
                             </div>
@@ -650,9 +665,14 @@ export default function Home() {
                                 <Clock3 size={12} />
                                 {checkedLabel(j.lastSeen)}
                               </span>
-                              {!matchesLocationPreference(j, data.profile) && (
+                              {j.analysis && (
+                                <span className={`badge ${j.analysis.location.status === "eligible" ? "" : "warn"}`}>
+                                  <MapPin size={12} /> {j.analysis.location.label}
+                                </span>
+                              )}
+                              {!j.analysis && !matchesLocationPreference(j, data.profile) && (
                                 <span className="badge warn">
-                                  Review location
+                                  {j.loc.state.reason || 'Review location'}
                                 </span>
                               )}
                               {j.reason && (
@@ -664,12 +684,8 @@ export default function Home() {
                           </div>
                           <div className="scores">
                             <div className="scorebox fit">
-                              <strong>{j.score.fit}</strong>
-                              <span>Fit</span>
-                            </div>
-                            <div className="scorebox">
-                              <strong>{j.score.quality}</strong>
-                              <span>Confidence</span>
+                              <strong>{j.analysis?.skill.score ?? "—"}</strong>
+                              <span>Skill match</span>
                             </div>
                           </div>
                           <div className="card-actions">
@@ -681,7 +697,7 @@ export default function Home() {
                                   ? changeStatus(j.id, "inbox")
                                   : j.status === "rejected"
                                     ? changeStatus(j.id, "applied")
-                                    : j.status === "applied"
+                                    : (j.status === "applied" || j.status === "in_progress")
                                       ? askReason(j.id, "rejected")
                                       : askReason(j.id, "passed")
                               }
@@ -694,12 +710,18 @@ export default function Home() {
                               )}{" "}
                               {j.status === "rejected"
                                 ? "Return to applied"
-                                : j.status === "applied"
+                                : (j.status === "applied" || j.status === "in_progress")
                                   ? "Mark rejected"
                                 : j.status === "passed"
                                   ? "Restore"
                                   : "Pass"}
                             </button>
+                            {(j.status === "applied" || j.status === "in_progress") && (
+                              <button className="text-action" disabled={pending === j.id}
+                                onClick={() => changeStatus(j.id, j.status === "in_progress" ? "applied" : "in_progress")}>
+                                <ArrowRight size={14} /> {j.status === "in_progress" ? "Return to applied" : "Mark in progress"}
+                              </button>
+                            )}
                             <button
                               className="text-action detail"
                               onClick={() => setSelectedId(j.id)}
@@ -763,20 +785,10 @@ export default function Home() {
                       <div className="side-label">Where you work</div>
                       <p>
                         {data.profile.location === "preferred"
-                          ? "Preferred locations"
+                          ? (data.profile.preferredLocations || "Preferred locations")
                           : data.profile.location === "remote"
                             ? "Remote · all regions"
                             : "All locations"}
-                      </p>
-                    </div>
-                    <div className="side-section">
-                    <div className="side-label">Pay & listing confidence</div>
-                      <p>
-                        {data.profile.minSalary
-                          ? `$${data.profile.minSalary.toLocaleString()} salary floor`
-                          : "No salary floor set"}
-                        <br />
-                        Warn below confidence {data.profile.minQuality}
                       </p>
                     </div>
                     <button
@@ -788,15 +800,15 @@ export default function Home() {
                   </div>
                   <div className="principle">
                     <ShieldCheck size={22} />
-                    <strong>Evidence over promises.</strong>An ATS listing is a
-                    source check, not proof of hiring intent. Open a job to see
-                    exactly what contributes to each score.
+                    <strong>Three signals, kept separate.</strong>Skill match is
+                    scored from the full description. Location eligibility and
+                    listing legitimacy are pass, review, or fail gates.
                   </div>
                   <div className="principle">
                     <Sparkles size={21} />
-                    <strong>Fit is a starting point.</strong>Title, location,
-                    skill phrases, and pay. This first version uses transparent
-                    rules, not an AI résumé assessment.
+                    <strong>Evidence, not keywords.</strong>Open a job to see the
+                    exact listing requirements and the résumé or portfolio
+                    evidence used in the assessment.
                   </div>
                 </aside>
               </div>
@@ -907,17 +919,19 @@ export default function Home() {
             <section className="content-panel">
               <div className="panel-heading">
                 <div>
-                  <h2>{data.profile.onboardingComplete ? "Make the search yours." : "Welcome to Signal"}</h2>
+                  <h2>Make the search yours.</h2>
                   <p className="subtle">
-                    Choose your target roles and locations. Add résumé evidence now or later; job tracking works without AI.
+                    Signal uses these details to find relevant roles and compare
+                    the actual job responsibilities with your experience.
                   </p>
                 </div>
               </div>
               <form onSubmit={saveProfile}>
                 <div className="formgrid">
                   <div className="field full">
-                    <label htmlFor="candidate-name">Your name · required for cover letters</label>
-                    <Input id="candidate-name" maxLength={120} value={draft.name || ""} onChange={e=>setDraft({...draft,name:e.target.value,evidenceApproved:false})} />
+                    <label htmlFor="candidate-name">Your name</label>
+                    <Input id="candidate-name" required maxLength={120} value={draft.name || ""} onChange={e=>setDraft({...draft,name:e.target.value,evidenceApproved:false})} />
+                    <small>Used in the workspace header and to sign generated cover letters.</small>
                   </div>
                   <div className="field full">
                     <label htmlFor="roles">Target roles</label>
@@ -931,8 +945,8 @@ export default function Home() {
                       }
                     />
                     <small>
-                      Separate titles with commas. Title matches contribute up
-                      to 40 fit points.
+                      Separate titles with commas. These guide discovery; the
+                      title itself never adds points to the skill score.
                     </small>
                   </div>
                   <div className="field">
@@ -950,9 +964,7 @@ export default function Home() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="preferred">
-                          Preferred locations
-                        </SelectItem>
+                        <SelectItem value="preferred">Preferred locations</SelectItem>
                         <SelectItem value="remote">
                           Remote · all regions
                         </SelectItem>
@@ -960,58 +972,14 @@ export default function Home() {
                       </SelectContent>
                     </Select>
                     <small>
-                      Location comes from the feed label. Confirm state and
-                      residency restrictions in the posting.
+                      Signal reads the description for office requirements and
+                      state eligibility instead of trusting the feed label.
                     </small>
                   </div>
-                  <div className="field full">
+                  <div className="field">
                     <label htmlFor="preferred-locations">Preferred locations</label>
-                    <Input id="preferred-locations" maxLength={1000} placeholder="Cities, regions, or countries, separated by commas" value={draft.preferredLocations || ""} onChange={e=>setDraft({...draft,preferredLocations:e.target.value})} />
-                    <small>Used when Location is set to Preferred locations. Matches feed text; verify eligibility in the listing.</small>
-                  </div>
-                  <div className="field">
-                    <label htmlFor="salary">Minimum annual salary (USD)</label>
-                    <Input
-                      id="salary"
-                      type="number"
-                      min="0"
-                      max="1000000"
-                      step="1000"
-                      value={draft.minSalary}
-                      onChange={(e) =>
-                        setDraft({
-                          ...draft,
-                          minSalary: Number(e.target.value),
-                        })
-                      }
-                    />
-                    <small>
-                      0 means no floor. Listings stay visible; detected ranges
-                      below your floor rank lower. Verify currency and pay bands.
-                    </small>
-                  </div>
-                  <div className="field">
-                    <label htmlFor="quality">
-                      Low-confidence warning threshold
-                    </label>
-                    <Input
-                      id="quality"
-                      type="number"
-                      min="0"
-                      max="100"
-                      value={draft.minQuality}
-                      onChange={(e) =>
-                        setDraft({
-                          ...draft,
-                          minQuality: Number(e.target.value),
-                        })
-                      }
-                    />
-                    <small>
-                      This no longer hides listings. Scores below the threshold
-                      receive a warning. Source presence 50 · recent check 15 ·
-                      description 15 · pay 10 · department 10.
-                    </small>
+                    <Input id="preferred-locations" maxLength={1000} placeholder="Cities, states, regions, or countries, separated by commas" value={draft.preferredLocations || ""} onChange={e=>setDraft({...draft,preferredLocations:e.target.value})} />
+                    <small>Used to decide whether remote, hybrid, and office-based roles are actually eligible for you.</small>
                   </div>
                   <div className="field">
                     <label htmlFor="skills">Skills to look for</label>
@@ -1024,13 +992,13 @@ export default function Home() {
                       }
                     />
                     <small>
-                      Comma-separated phrases. Matching is literal in this
-                      version, contributing up to 25 fit points.
+                      These help Signal understand your capability areas. They
+                      are context, not literal keyword points.
                     </small>
                   </div>
                   <div className="field full">
                     <label htmlFor="resume">
-                      Résumé text <span className="subtle">· optional</span>
+                      Résumé text
                     </label>
                     <Textarea
                       id="resume"
@@ -1043,7 +1011,9 @@ export default function Home() {
                       }
                     />
                     <small>
-                      Saved privately. Generating a letter sends approved résumé and portfolio text plus the selected listing to OpenAI. Review the evidence before enabling this.
+                      Saved privately with your profile and sent to OpenAI only
+                      when Signal analyzes job fit or writes a cover letter.
+                      Review extracted skill phrases before saving.
                     </small>
                     <Button
                       type="button"
@@ -1054,19 +1024,14 @@ export default function Home() {
                     >
                       Use skill phrases from résumé
                     </Button>
-                  </div>
-                  <div className="field full">
-                    <label htmlFor="resume-file">Import résumé text (.txt, up to 100 KB)</label>
                     <Input id="resume-file" type="file" accept=".txt,text/plain" onChange={async e=>{const file=e.target.files?.[0]; if(!file)return; if(file.size>100000){toast.error("Choose a text file under 100 KB.");return;} const text=await file.text(); if(text.length>40000){toast.error("Résumé must be under 40,000 characters.");return;} setDraft(d=>({...d,resume:text,evidenceApproved:false})); e.target.value="";}} />
-                    <small>For PDF or Word résumés, copy the text into the field above. Original files are not stored.</small>
                   </div>
                   <div className="field full">
-                    <label htmlFor="portfolio">Portfolio evidence · optional</label>
-                    <Textarea id="portfolio" rows={5} maxLength={40000} placeholder="Paste the portfolio facts and achievements you want letters to use. URLs alone are not fetched." value={draft.portfolio || ""} onChange={e=>setDraft({...draft,portfolio:e.target.value,evidenceApproved:false})} />
+                    <label htmlFor="portfolio">Portfolio evidence <span className="subtle">· optional</span></label>
+                    <Textarea id="portfolio" rows={5} maxLength={40000} placeholder="Paste factual project details and achievements you allow Signal to use. URLs alone are not fetched." value={draft.portfolio || ""} onChange={e=>setDraft({...draft,portfolio:e.target.value,evidenceApproved:false})} />
                   </div>
                   <div className="field full">
-                    <label><input type="checkbox" checked={Boolean(draft.evidenceApproved)} onChange={e=>setDraft({...draft,evidenceApproved:e.target.checked})} /> I reviewed this evidence and allow Signal to send it with the selected listing to OpenAI when I generate a letter.</label>
-                    <small>You can replace or clear this text and revoke approval at any time. Saved letters remain until you edit or clear them.</small>
+                    <label className="evidence-consent"><input type="checkbox" checked={Boolean(draft.evidenceApproved)} onChange={e=>setDraft({...draft,evidenceApproved:e.target.checked})} /> I reviewed this evidence and allow Signal to send it with the selected listing to OpenAI when analyzing a job or generating a cover letter.</label>
                   </div>
                 </div>
                 <div className="form-actions">
@@ -1085,12 +1050,12 @@ export default function Home() {
             </section>
           </section>}
         </Tabs>
-        {!loading && !error && !canGenerate && <p role="status" className="drawer-note">{!data.generationAvailable ? "Cover-letter generation is not configured for this instance. Job tracking is available." : "To enable cover letters, save your name, résumé, and evidence approval in Preferences."}</p>}
-        {!loading && !error && <UpdateNotice />}
         <footer className="footer">
           <span>Signal · A personal job inbox</span>
-          <span>Confidence ≠ hiring intent. Fit ≠ likelihood of an offer.</span>
+          <span>Skill match ≠ hiring outcome. Verify details before applying.</span>
         </footer>
+        {!loading && !error && !canGenerate && <p role="status" className="drawer-note">{!data.generationAvailable ? "Cover-letter generation is not configured for this instance. Job tracking is available." : "To enable cover letters, save your name, résumé, and evidence approval in Preferences."}</p>}
+        {!loading && !error && <UpdateNotice />}
       </main>
       <Sheet
         open={!!selectedId}
@@ -1102,10 +1067,10 @@ export default function Home() {
           {selected && (
             <>
               <div className="eyebrow">
-                {selected.company} / {selected.department || "Role"}
+                {selected.company} / {selected.department || "Design"}
               </div>
               <SheetTitle>{selected.title}</SheetTitle>
-              <SheetDescription>{selected.location}</SheetDescription>
+              <SheetDescription>{selected.loc.location}</SheetDescription>
               <div className="job-meta">
                 <span>{selected.salary}</span>
                 <span className={`badge ${selected.active && selected.verification === "employer" ? "" : "warn"}`}>
@@ -1176,11 +1141,11 @@ export default function Home() {
                   <Check size={15} />
                   {selected.status === "applied"
                     ? "Undo applied"
-                    : selected.status === "rejected"
+                    : (selected.status === "rejected" || selected.status === "in_progress")
                       ? "Return to applied"
                     : "Mark applied"}
                 </Button>
-                {selected.status === "applied" && (
+                {(selected.status === "applied" || selected.status === "in_progress") && (
                   <Button
                     variant="ghost"
                     onClick={() => askReason(selected.id, "rejected")}
@@ -1189,7 +1154,14 @@ export default function Home() {
                     Mark rejected
                   </Button>
                 )}
+                {selected.status === "applied" && (
+                  <Button variant="ghost" disabled={pending === selected.id}
+                    onClick={() => changeStatus(selected.id, "in_progress")}>
+                    <ArrowRight size={14} /> Mark in progress
+                  </Button>
+                )}
                 {selected.status !== "applied" &&
+                  selected.status !== "in_progress" &&
                   selected.status !== "rejected" && (
                     <Button
                       variant="ghost"
@@ -1203,52 +1175,28 @@ export default function Home() {
                 <ArrowUpRight size={13} /> Employer links open in a new tab in
                 the browser where you opened Signal.
               </p>
-              <div className="signal-grid">
-                <div className="signal-box">
-                  <strong>
-                    {selected.score.fit}
-                    <span className="subtle"> / 100</span>
-                  </strong>
-                  <h3>Fit estimate</h3>
-                  {selected.score.fitSignals.map((s, i) => (
-                    <div className="signal-line" key={i}>
-                      <span>{s.label}</span>
-                      <span>+{s.points}</span>
-                    </div>
-                  ))}
+              {selected.analysis ? <>
+                <div className="evaluation-summary">
+                  <div><strong>{selected.analysis.skill.score ?? "—"}<span className="subtle"> / 100</span></strong><span>Skill match</span></div>
+                  <div><strong className={`gate ${selected.analysis.location.status}`}>{selected.analysis.location.status}</strong><span>Location eligibility</span></div>
+                  <div><strong className={`gate ${selected.analysis.legitimacy.status}`}>{selected.analysis.legitimacy.status}</strong><span>Listing legitimacy</span></div>
                 </div>
-                <div className="signal-box">
-                  <strong>
-                    {selected.score.quality}
-                    <span className="subtle"> / 100</span>
-                  </strong>
-                  <h3>Listing confidence</h3>
-                  {selected.score.qualitySignals.map((s, i) => (
-                    <div className="signal-line" key={i}>
-                      <span>{s.label}</span>
-                      <span>
-                        {s.points >= 0 ? "+" : ""}
-                        {s.points}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <p className="drawer-note">
-                These are heuristic scores, not probabilities. Skill phrases do
-                not establish qualification. Hiring intent, applicant
-                competition, and repost history are not known.
-              </p>
-              {selected.score.warnings.length > 0 && (
-                <div className="message">
-                  <strong>Worth checking</strong>
-                  <ul className="list-disc pl-5 mt-2">
-                    {selected.score.warnings.map((w) => (
-                      <li key={w}>{w}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+                <div className={`recommendation ${selected.analysis.recommendation}`}><strong>{selected.analysis.recommendation === "apply" ? "Recommended: Apply" : selected.analysis.recommendation === "pass" ? "Recommended: Pass" : "Recommended: Review"}</strong><span>{selected.analysis.skill.summary}</span></div>
+                {selected.analysis.skill.components.length > 0 && <div className="signal-grid evaluation-grid">
+                  <div className="signal-box skill-panel">
+                    <h3>How the score was built</h3>
+                    {selected.analysis.skill.components.map(component=><div className="signal-line" key={component.key}><span><b>{component.label}</b><small>{component.summary}</small></span><span>{component.score} / {component.max}</span></div>)}
+                  </div>
+                  <div className="signal-box gate-panel">
+                    <h3>Eligibility and legitimacy</h3>
+                    <div className="evidence-block"><b>{selected.analysis.location.label}</b>{selected.analysis.location.evidence.map(item=><small key={item}>{item}</small>)}</div>
+                    <div className="evidence-block"><b>{selected.analysis.legitimacy.label}</b>{selected.analysis.legitimacy.evidence.map(item=><small key={item}>{item}</small>)}</div>
+                  </div>
+                </div>}
+                {selected.analysis.skill.matches.length > 0 && <div className="evidence-list"><h3>Job requirements matched to your evidence</h3>{selected.analysis.skill.matches.map((match,i)=><div className={`evidence-match ${match.assessment}`} key={`${match.requirement}-${i}`}><span>{match.assessment}</span><b>“{match.requirement}”</b>{match.evidence&&<p>Your evidence: “{match.evidence}”</p>}<small>{match.reason}</small></div>)}</div>}
+                {selected.analysis.skill.gaps.length > 0 && <div className="message"><strong>Material gaps or unknowns</strong><ul className="list-disc pl-5 mt-2">{selected.analysis.skill.gaps.map(gap=><li key={gap}>{gap}</li>)}</ul></div>}
+                <p className="drawer-note">The skill score comes only from responsibilities and required experience found on the page. Location and legitimacy are separate gates and never add points.</p>
+              </> : <div className="analysis-empty"><strong>This listing has not been analyzed with the new system.</strong><p>Signal will read the full description and compare its responsibilities with your saved résumé and verified portfolio evidence.</p><Button disabled={pending===`evaluate:${selected.id}`} onClick={()=>analyzeJob(selected.id)}>{pending===`evaluate:${selected.id}`?"Analyzing…":"Analyze listing"}</Button></div>}
               <h3>Source record</h3>
               <div className="data-row">
                 <span>Source</span>
@@ -1304,7 +1252,6 @@ export default function Home() {
       >
         <DialogContent className="cover-dialog">
           <DialogTitle>Cover letter</DialogTitle>
-          {!canGenerate && <p role="status">Generation is unavailable. You can still edit and export saved letters.</p>}
           <DialogDescription>
             {data.jobs.find((j) => j.id === coverJobId)?.title} ·{" "}
             {data.jobs.find((j) => j.id === coverJobId)?.company}. Tailored from
@@ -1367,8 +1314,9 @@ export default function Home() {
         <DialogContent className="manual-dialog">
           <DialogTitle>Add a job</DialogTitle>
           <DialogDescription>
-            Paste a LinkedIn or employer listing. Signal will gather the job
-            details, add it to your inbox, and score it automatically.
+            Paste an employer or job-board listing. Signal will read the full
+            page, verify its source, and compare the actual responsibilities
+            with your experience.
           </DialogDescription>
           <form onSubmit={addManualJob} className="space-y-5">
             <div className="field">
@@ -1386,14 +1334,13 @@ export default function Home() {
               />
             </div>
             <p className="import-note">
-              Signal looks for structured listing data first, then reads the
-              page itself. Some sites may block automated access; when that
-              happens, use the employer’s direct listing instead.
+              The score uses only skill fit. Location eligibility and
+              listing legitimacy are separate gates and never add points.
             </p>
             <div className="form-actions">
               <Button type="submit" disabled={pending === "manual-job"}>
                 {pending === "manual-job"
-                  ? "Gathering listing…"
+                  ? "Reading and analyzing…"
                   : "Add job"}
               </Button>
               <Button
